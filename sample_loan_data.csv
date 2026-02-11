@@ -1,0 +1,4 @@
+loan_id,principal,interest_rate,term,ftp_rate,discount_rate,nii_fee,nii_months,nie_amount,pd_rating,lgd_grade,zip_code
+LOAN-001,1000000,6.5,100,2.3,2.5,100,50,200,5,C,45208
+LOAN-002,500000,7.0,84,2.3,2.5,75,48,150,4,B,45209
+LOAN-003,1500000,6.0,120,2.3,2.5,150,60,250,3,A,45210
