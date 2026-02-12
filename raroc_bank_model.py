@@ -260,10 +260,21 @@ app.layout = html.Div([
                 html.Div([
                     html.Button('Download Full Schedule (CSV)', id='download-btn',
                                style={'backgroundColor': '#3498db', 'color': 'white', 'padding': '10px 20px',
+                                      'border': 'none', 'borderRadius': '5px', 'marginBottom': '10px',
+                                      'marginRight': '10px'}),
+                    html.Button('📅 View All Monthly Cash Flows', id='toggle-monthly-btn', n_clicks=0,
+                               style={'backgroundColor': '#27ae60', 'color': 'white', 'padding': '10px 20px',
                                       'border': 'none', 'borderRadius': '5px', 'marginBottom': '10px'}),
                     dcc.Download(id='download-dataframe-csv'),
                 ]),
-                html.Div(id='amortization-table', style={'overflowX': 'auto'})
+                html.Div(id='amortization-table', style={'overflowX': 'auto'}),
+
+                # Collapsible Monthly Cash Flow Section
+                html.Div(id='monthly-cashflow-section', children=[
+                    html.Hr(style={'marginTop': '30px'}),
+                    html.H3('📊 Monthly Cash Flow Detail', style={'textAlign': 'center', 'color': '#2c3e50'}),
+                    html.Div(id='monthly-cashflow-table', style={'overflowX': 'auto', 'marginTop': '20px'})
+                ], style={'display': 'none'})
             ])
         ], style={'marginTop': '20px'})
 
@@ -527,6 +538,115 @@ def update_results(n_clicks, contents, principal, interest_rate, term, ftp_rate,
     ])
 
     return summary_cards, cashflow_fig, balance_fig, pv_fig, table_div
+
+# Toggle monthly cash flow section
+@app.callback(
+    [Output('monthly-cashflow-section', 'style'),
+     Output('toggle-monthly-btn', 'children'),
+     Output('monthly-cashflow-table', 'children')],
+    [Input('toggle-monthly-btn', 'n_clicks'),
+     Input('calculate-btn', 'n_clicks')],
+    [State('principal', 'value'),
+     State('interest-rate', 'value'),
+     State('term', 'value'),
+     State('ftp-rate', 'value'),
+     State('discount-rate', 'value'),
+     State('nii-fee', 'value'),
+     State('nii-months', 'value'),
+     State('nie-amount', 'value')]
+)
+def toggle_monthly_view(toggle_clicks, calc_clicks, principal, interest_rate, term,
+                       ftp_rate, discount_rate, nii_fee, nii_months, nie_amount):
+
+    # If no calculation has been done yet, keep hidden
+    if calc_clicks == 0:
+        return {'display': 'none'}, '📅 View All Monthly Cash Flows', html.Div()
+
+    # Toggle visibility based on odd/even clicks
+    is_visible = (toggle_clicks % 2) == 1
+
+    if is_visible:
+        # Generate the full monthly cash flow table
+        df = generate_amortization_schedule(
+            principal, interest_rate, term, ftp_rate,
+            nii_fee, nii_months, nie_amount, discount_rate
+        )
+
+        # Create a simplified view focused on cash flows
+        monthly_df = df[['Month', 'Beginning_Balance', 'Interest_Income', 'Interest_Expense',
+                        'Non_Interest_Income', 'Non_Interest_Expense', 'Net_Income',
+                        'PV_Interest_Income', 'PV_Interest_Expense',
+                        'PV_Non_Interest_Income', 'PV_Non_Interest_Expense', 'PV_Net_Income']].copy()
+
+        # Format for display
+        monthly_df_formatted = monthly_df.copy()
+        currency_cols = ['Beginning_Balance', 'Interest_Income', 'Interest_Expense',
+                        'Non_Interest_Income', 'Non_Interest_Expense', 'Net_Income',
+                        'PV_Interest_Income', 'PV_Interest_Expense',
+                        'PV_Non_Interest_Income', 'PV_Non_Interest_Expense', 'PV_Net_Income']
+
+        for col in currency_cols:
+            monthly_df_formatted[col] = monthly_df_formatted[col].apply(lambda x: f'${x:,.2f}')
+
+        # Create enhanced table
+        monthly_table = dash_table.DataTable(
+            data=monthly_df_formatted.to_dict('records'),
+            columns=[{'name': col.replace('_', ' ').title(), 'id': col}
+                    for col in monthly_df_formatted.columns],
+            style_table={'overflowX': 'auto', 'maxHeight': '600px', 'overflowY': 'auto'},
+            style_cell={
+                'textAlign': 'right',
+                'padding': '12px',
+                'fontSize': '13px',
+                'fontFamily': 'Arial',
+                'minWidth': '120px'
+            },
+            style_header={
+                'backgroundColor': '#27ae60',
+                'color': 'white',
+                'fontWeight': 'bold',
+                'textAlign': 'center',
+                'position': 'sticky',
+                'top': 0
+            },
+            style_data_conditional=[
+                {
+                    'if': {'row_index': 'odd'},
+                    'backgroundColor': '#f0f9ff'
+                },
+                {
+                    'if': {
+                        'filter_query': '{Net_Income} contains "-"',
+                        'column_id': 'Net_Income'
+                    },
+                    'backgroundColor': '#fee',
+                    'color': '#c00'
+                },
+                {
+                    'if': {'column_id': 'Month'},
+                    'textAlign': 'center',
+                    'fontWeight': 'bold'
+                }
+            ],
+            fixed_rows={'headers': True},
+            page_size=50
+        )
+
+        table_container = html.Div([
+            html.P(f'📊 Complete Monthly Cash Flow Analysis - All {len(df)} Months',
+                  style={'fontWeight': 'bold', 'fontSize': '16px', 'color': '#2c3e50',
+                         'textAlign': 'center', 'marginBottom': '15px'}),
+            html.P('Scroll to view all months. Red highlights indicate negative net income.',
+                  style={'fontStyle': 'italic', 'color': '#7f8c8d', 'textAlign': 'center',
+                         'marginBottom': '20px'}),
+            monthly_table
+        ], style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '10px',
+                 'boxShadow': '2px 2px 10px rgba(0,0,0,0.1)'})
+
+        return {'display': 'block'}, '❌ Hide Monthly Cash Flows', table_container
+
+    else:
+        return {'display': 'none'}, '📅 View All Monthly Cash Flows', html.Div()
 
 # Download callback
 @app.callback(
