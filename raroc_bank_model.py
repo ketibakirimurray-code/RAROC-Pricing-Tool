@@ -249,9 +249,10 @@ app.layout = html.Div([
             # Visualizations
             html.Div([
                 html.H3('Cash Flow Visualizations', style={'textAlign': 'center', 'marginTop': '30px'}),
-                dcc.Graph(id='cashflow-chart'),
+                dcc.Graph(id='income-chart'),
+                dcc.Graph(id='expense-chart'),
+                dcc.Graph(id='netincome-chart'),
                 dcc.Graph(id='balance-chart'),
-                dcc.Graph(id='pv-comparison-chart'),
             ]),
 
             # Detailed Table
@@ -302,9 +303,10 @@ def toggle_input_method(method):
 # Main calculation callback
 @app.callback(
     [Output('summary-cards', 'children'),
-     Output('cashflow-chart', 'figure'),
+     Output('income-chart', 'figure'),
+     Output('expense-chart', 'figure'),
+     Output('netincome-chart', 'figure'),
      Output('balance-chart', 'figure'),
-     Output('pv-comparison-chart', 'figure'),
      Output('amortization-table', 'children')],
     [Input('calculate-btn', 'n_clicks'),
      Input('upload-data', 'contents')],
@@ -327,7 +329,7 @@ def update_results(n_clicks, contents, principal, interest_rate, term, ftp_rate,
                   lgd_grade, zip_code, loan_id, filename):
 
     if n_clicks == 0 and contents is None:
-        return [html.Div()], {}, {}, {}, html.Div()
+        return [html.Div()], {}, {}, {}, {}, html.Div()
 
     # Generate amortization schedule
     df = generate_amortization_schedule(
@@ -432,25 +434,93 @@ def update_results(n_clicks, contents, principal, interest_rate, term, ftp_rate,
     ], style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '10px',
              'boxShadow': '2px 2px 10px rgba(0,0,0,0.1)', 'marginBottom': '30px'})
 
-    # Cash Flow Chart
-    cashflow_fig = go.Figure()
-    cashflow_fig.add_trace(go.Scatter(x=df['Month'], y=df['Interest_Income'],
-                                      name='Interest Income', line=dict(color='#27ae60', width=2)))
-    cashflow_fig.add_trace(go.Scatter(x=df['Month'], y=df['Interest_Expense'],
-                                      name='Interest Expense', line=dict(color='#e74c3c', width=2)))
-    cashflow_fig.add_trace(go.Scatter(x=df['Month'], y=df['Non_Interest_Income'],
-                                      name='Non-Interest Income', line=dict(color='#3498db', width=2)))
-    cashflow_fig.add_trace(go.Scatter(x=df['Month'], y=df['Non_Interest_Expense'],
-                                      name='Non-Interest Expense', line=dict(color='#e67e22', width=2)))
-    cashflow_fig.add_trace(go.Scatter(x=df['Month'], y=df['Net_Income'],
-                                      name='Net Income', line=dict(color='#9b59b6', width=3, dash='dash')))
+    # Chart 1: Income Stacked Area Chart
+    income_fig = go.Figure()
 
-    cashflow_fig.update_layout(
-        title='Monthly Cash Flows Over Loan Term',
+    # Stack the income components
+    income_fig.add_trace(go.Scatter(
+        x=df['Month'], y=df['Interest_Income'],
+        name='Interest Income',
+        mode='lines',
+        line=dict(width=0.5, color='#27ae60'),
+        stackgroup='income',
+        fillcolor='rgba(39, 174, 96, 0.7)'
+    ))
+
+    income_fig.add_trace(go.Scatter(
+        x=df['Month'], y=df['Non_Interest_Income'],
+        name='Non-Interest Income',
+        mode='lines',
+        line=dict(width=0.5, color='#3498db'),
+        stackgroup='income',
+        fillcolor='rgba(52, 152, 219, 0.7)'
+    ))
+
+    income_fig.update_layout(
+        title='💰 Total Income Breakdown (Stacked)',
         xaxis_title='Month',
-        yaxis_title='Amount ($)',
+        yaxis_title='Income ($)',
         hovermode='x unified',
-        height=500
+        height=400,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    # Chart 2: Expense Stacked Area Chart
+    expense_fig = go.Figure()
+
+    # Stack the expense components
+    expense_fig.add_trace(go.Scatter(
+        x=df['Month'], y=df['Interest_Expense'],
+        name='Interest Expense (FTP)',
+        mode='lines',
+        line=dict(width=0.5, color='#e74c3c'),
+        stackgroup='expense',
+        fillcolor='rgba(231, 76, 60, 0.7)'
+    ))
+
+    expense_fig.add_trace(go.Scatter(
+        x=df['Month'], y=df['Non_Interest_Expense'],
+        name='Non-Interest Expense',
+        mode='lines',
+        line=dict(width=0.5, color='#e67e22'),
+        stackgroup='expense',
+        fillcolor='rgba(230, 126, 34, 0.7)'
+    ))
+
+    expense_fig.update_layout(
+        title='💸 Total Expenses Breakdown (Stacked)',
+        xaxis_title='Month',
+        yaxis_title='Expenses ($)',
+        hovermode='x unified',
+        height=400,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    # Chart 3: Net Income Line Chart
+    netincome_fig = go.Figure()
+
+    netincome_fig.add_trace(go.Scatter(
+        x=df['Month'], y=df['Net_Income'],
+        name='Net Income',
+        mode='lines',
+        line=dict(color='#9b59b6', width=3),
+        fill='tozeroy',
+        fillcolor='rgba(155, 89, 182, 0.3)'
+    ))
+
+    # Add zero line for reference
+    netincome_fig.add_hline(y=0, line_dash="dash", line_color="gray",
+                           annotation_text="Break Even", annotation_position="right")
+
+    netincome_fig.update_layout(
+        title='📊 Net Income Over Time',
+        xaxis_title='Month',
+        yaxis_title='Net Income ($)',
+        hovermode='x unified',
+        height=400,
+        showlegend=True
     )
 
     # Balance Chart
@@ -537,7 +607,7 @@ def update_results(n_clicks, contents, principal, interest_rate, term, ftp_rate,
         table
     ])
 
-    return summary_cards, cashflow_fig, balance_fig, pv_fig, table_div
+    return summary_cards, income_fig, expense_fig, netincome_fig, balance_fig, table_div
 
 # Toggle monthly cash flow section
 @app.callback(
