@@ -1,5 +1,5 @@
 # RAROC Model for Commercial Term Loan Pricing
-# Phase 1: Cash Flow Calculations and Present Value Analysis
+# Phase 1 & 2: Cash Flows, EL, Economic Capital, Regulatory Capital, RAROC
 
 import dash
 from dash import dcc, html, dash_table, Input, Output, State
@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 import numpy as np
+from scipy.stats import norm
 from datetime import datetime, timedelta
 import base64
 import io
@@ -114,13 +115,124 @@ def calculate_summary_metrics(df):
         'PV_Net_Income': df['PV_Net_Income'].sum()
     }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 2 CALCULATIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def calculate_expected_loss(df, pd_rate, lgd_rate):
+    """
+    Expected Loss (EL) per month = PD × LGD × EAD
+    EAD = Beginning Balance for that month
+    Monthly PD = 1 - (1 - Annual PD)^(1/12)
+    """
+    monthly_pd = 1 - (1 - pd_rate) ** (1 / 12)
+    df = df.copy()
+    df['Monthly_PD']  = monthly_pd
+    df['LGD']         = lgd_rate
+    df['EAD']         = df['Beginning_Balance']
+    df['Monthly_EL']  = monthly_pd * lgd_rate * df['EAD']
+    df['Cumulative_EL'] = df['Monthly_EL'].cumsum()
+    return df
+
+def calculate_economic_capital(pd_rate, lgd_rate, ead, maturity_years=8.33,
+                                confidence=0.999):
+    """
+    Basel II IRB (Vasicek model) Economic Capital
+    ─────────────────────────────────────────────
+    R   = Asset correlation (Basel formula)
+    b   = Maturity adjustment exponent
+    MA  = Maturity adjustment factor
+    K   = Capital requirement %
+    EC  = K × EAD  (Unexpected Loss capital buffer)
+    """
+    if pd_rate <= 0:
+        pd_rate = 0.0001
+    if pd_rate >= 1:
+        pd_rate = 0.9999
+
+    # Asset correlation (Basel II corporate formula)
+    R = (0.12 * (1 - np.exp(-50 * pd_rate)) / (1 - np.exp(-50)) +
+         0.24 * (1 - (1 - np.exp(-50 * pd_rate)) / (1 - np.exp(-50))))
+
+    # Maturity adjustment
+    b = (0.11852 - 0.05478 * np.log(pd_rate)) ** 2
+    MA = (1 + (maturity_years - 2.5) * b) / (1 - 1.5 * b)
+
+    # Capital requirement (K)
+    N    = norm.cdf
+    Ninv = norm.ppf
+    K = (lgd_rate * N((1 - R) ** (-0.5) * Ninv(pd_rate) +
+                       (R / (1 - R)) ** 0.5 * Ninv(confidence)) -
+         pd_rate * lgd_rate) * MA
+
+    K = max(K, 0)
+    ec  = K * ead
+    el  = pd_rate * lgd_rate * ead
+    uel = ec  # EC already nets out EL in Basel formula
+
+    return {
+        'K_pct':            K,
+        'Economic_Capital':  ec,
+        'Asset_Correlation': R,
+        'Maturity_Adj':      MA,
+        'UEL':               uel,
+        'EL':                el
+    }
+
+def calculate_regulatory_capital(pd_rate, lgd_rate, ead, loan_type='commercial'):
+    """
+    Regulatory Capital (Basel III Standardised Approach)
+    ────────────────────────────────────────────────────
+    Risk Weight (RW) is mapped from PD bucket.
+    Reg C = EAD × RW × 8% (minimum CET1 ratio)
+    """
+    # Risk weight schedule (PD → RW for commercial/corporate loans)
+    if   pd_rate <= 0.0025: rw = 0.20
+    elif pd_rate <= 0.005:  rw = 0.35
+    elif pd_rate <= 0.01:   rw = 0.50
+    elif pd_rate <= 0.02:   rw = 0.75
+    elif pd_rate <= 0.04:   rw = 1.00
+    elif pd_rate <= 0.08:   rw = 1.50
+    elif pd_rate <= 0.15:   rw = 2.00
+    elif pd_rate <= 0.25:   rw = 2.50
+    elif pd_rate <= 0.40:   rw = 3.00
+    elif pd_rate <= 0.60:   rw = 3.50
+    else:                   rw = 4.00
+
+    min_capital_ratio = 0.08   # 8% minimum Basel III
+    tier1_ratio       = 0.10   # 10% Tier 1 target (common for community banks)
+
+    rwa      = ead * rw
+    reg_cap  = rwa * min_capital_ratio
+    tier1    = rwa * tier1_ratio
+
+    return {
+        'Risk_Weight':       rw,
+        'RWA':               rwa,
+        'Reg_Capital':       reg_cap,
+        'Tier1_Capital':     tier1,
+        'Min_Capital_Ratio': min_capital_ratio,
+        'Tier1_Ratio':       tier1_ratio
+    }
+
+def calculate_raroc(net_income, el, economic_capital):
+    """
+    RAROC = (Net Income – Expected Loss) / Economic Capital
+    A RAROC > Hurdle Rate (typically 10-15%) = value-creating loan
+    """
+    if economic_capital <= 0:
+        return 0
+    risk_adjusted_return = net_income - el
+    raroc = risk_adjusted_return / economic_capital
+    return raroc
+
 # App Layout
 app.layout = html.Div([
     # Header
     html.Div([
         html.H1('🏦 RAROC Model - Commercial Term Loan Pricing',
                 style={'color': 'white', 'textAlign': 'center', 'margin': '0', 'padding': '20px'}),
-        html.P('Phase 1: Cash Flow Analysis & Present Value Calculations',
+        html.P('Phase 1: Cash Flows & PV  |  Phase 2: EL, Economic Capital, Reg Capital & RAROC',
                style={'color': 'white', 'textAlign': 'center', 'margin': '0', 'paddingBottom': '20px'})
     ], style={'backgroundColor': '#2c3e50'}),
 
@@ -209,6 +321,12 @@ app.layout = html.Div([
                     html.Label('Loan ID:', style={'fontWeight': 'bold'}),
                     dcc.Input(id='loan-id', type='text', value='LOAN-001',
                              style={'width': '100%', 'padding': '8px', 'marginBottom': '15px'}),
+
+                    html.Label('Hurdle Rate (%):', style={'fontWeight': 'bold'}),
+                    dcc.Input(id='hurdle-rate', type='number', value=12.0, step=0.1,
+                             style={'width': '100%', 'padding': '8px', 'marginBottom': '5px'}),
+                    html.P('Min RAROC for value-creating loan',
+                           style={'fontSize': '11px', 'color': '#7f8c8d', 'marginBottom': '15px'}),
                 ], style={'width': '30%', 'display': 'inline-block', 'verticalAlign': 'top', 'padding': '10px'}),
             ]),
 
@@ -277,7 +395,43 @@ app.layout = html.Div([
                     html.Div(id='monthly-cashflow-table', style={'overflowX': 'auto', 'marginTop': '20px'})
                 ], style={'display': 'none'})
             ])
-        ], style={'marginTop': '20px'})
+        ], style={'marginTop': '20px'}),
+
+        # ── PHASE 2 RESULTS ──────────────────────────────────────────────────
+        html.Div(id='phase2-section', style={'marginTop': '40px', 'display': 'none'}, children=[
+            html.Hr(),
+            html.Div([
+                html.H2('Phase 2: Credit Risk & Capital',
+                        style={'textAlign': 'center', 'color': '#2c3e50', 'marginBottom': '5px'}),
+                html.P('Expected Loss  |  Economic Capital  |  Regulatory Capital  |  RAROC',
+                       style={'textAlign': 'center', 'color': '#7f8c8d', 'fontSize': '14px',
+                              'marginBottom': '30px'})
+            ]),
+
+            # RAROC verdict banner
+            html.Div(id='raroc-banner'),
+
+            # Phase 2 KPI cards
+            html.Div(id='phase2-cards'),
+
+            # Phase 2 charts
+            html.Div([
+                dcc.Graph(id='el-chart'),
+                dcc.Graph(id='capital-chart'),
+                dcc.Graph(id='raroc-waterfall'),
+            ]),
+
+            # Monthly EL table (toggleable)
+            html.Div([
+                html.Button('View Monthly EL Schedule', id='toggle-el-btn', n_clicks=0,
+                           style={'backgroundColor': '#8e44ad', 'color': 'white',
+                                  'padding': '10px 20px', 'border': 'none',
+                                  'borderRadius': '5px', 'marginBottom': '10px',
+                                  'cursor': 'pointer'}),
+                html.Div(id='el-table-section', style={'display': 'none'},
+                         children=[html.Div(id='el-monthly-table')])
+            ])
+        ])
 
     ], style={'padding': '20px', 'maxWidth': '1400px', 'margin': 'auto'})
 ], style={'fontFamily': 'Arial, sans-serif', 'backgroundColor': '#f5f5f5', 'minHeight': '100vh'})
@@ -307,7 +461,13 @@ def toggle_input_method(method):
      Output('expense-chart', 'figure'),
      Output('netincome-chart', 'figure'),
      Output('balance-chart', 'figure'),
-     Output('amortization-table', 'children')],
+     Output('amortization-table', 'children'),
+     Output('phase2-section', 'style'),
+     Output('raroc-banner', 'children'),
+     Output('phase2-cards', 'children'),
+     Output('el-chart', 'figure'),
+     Output('capital-chart', 'figure'),
+     Output('raroc-waterfall', 'figure')],
     [Input('calculate-btn', 'n_clicks'),
      Input('upload-data', 'contents')],
     [State('principal', 'value'),
@@ -322,14 +482,17 @@ def toggle_input_method(method):
      State('lgd-grade', 'value'),
      State('zip-code', 'value'),
      State('loan-id', 'value'),
+     State('hurdle-rate', 'value'),
      State('upload-data', 'filename')]
 )
 def update_results(n_clicks, contents, principal, interest_rate, term, ftp_rate,
                   discount_rate, nii_fee, nii_months, nie_amount, pd_rating,
-                  lgd_grade, zip_code, loan_id, filename):
+                  lgd_grade, zip_code, loan_id, hurdle_rate, filename):
 
+    empty = [{}, {}, {}, {}, {}, {}]
     if n_clicks == 0 and contents is None:
-        return [html.Div()], {}, {}, {}, {}, html.Div()
+        return [html.Div()], {}, {}, {}, {}, html.Div(), \
+               {'display': 'none'}, html.Div(), html.Div(), {}, {}, {}
 
     # Generate amortization schedule
     df = generate_amortization_schedule(
@@ -607,7 +770,132 @@ def update_results(n_clicks, contents, principal, interest_rate, term, ftp_rate,
         table
     ])
 
-    return summary_cards, income_fig, expense_fig, netincome_fig, balance_fig, table_div
+    # ── PHASE 2 ──────────────────────────────────────────────────────────────
+    pd_rate  = PD_SCALE[pd_rating]
+    lgd_rate = LGD_SCALE[lgd_grade]
+    ead      = principal                       # EAD = original balance at origination
+    hurdle   = (hurdle_rate or 12.0) / 100.0
+
+    # Expected Loss
+    df_el     = calculate_expected_loss(df, pd_rate, lgd_rate)
+    total_el  = df_el['Monthly_EL'].sum()
+
+    # Economic Capital (on original balance / peak EAD)
+    ec_result  = calculate_economic_capital(pd_rate, lgd_rate, ead,
+                                            maturity_years=term / 12)
+    ec         = ec_result['Economic_Capital']
+
+    # Regulatory Capital
+    rc_result  = calculate_regulatory_capital(pd_rate, lgd_rate, ead)
+    reg_cap    = rc_result['Reg_Capital']
+
+    # RAROC
+    total_net  = metrics['PV_Net_Income']
+    raroc_val  = calculate_raroc(total_net, total_el, ec)
+    beats_hurdle = raroc_val >= hurdle
+
+    # ── RAROC Verdict Banner ──────────────────────────────────────────────────
+    raroc_banner = html.Div([
+        html.H2(f'RAROC: {raroc_val:.2%}',
+                style={'margin': '0', 'fontSize': '32px', 'fontWeight': 'bold'}),
+        html.P(f'Hurdle Rate: {hurdle:.2%}  |  '
+               f'{"PASS - This loan CREATES value" if beats_hurdle else "FAIL - This loan DESTROYS value"}',
+               style={'margin': '5px 0 0 0', 'fontSize': '16px'})
+    ], style={
+        'backgroundColor': '#d5f5e3' if beats_hurdle else '#fadbd8',
+        'border': f'3px solid {"#27ae60" if beats_hurdle else "#e74c3c"}',
+        'borderRadius': '12px', 'padding': '25px',
+        'textAlign': 'center', 'marginBottom': '30px',
+        'color': '#27ae60' if beats_hurdle else '#e74c3c'
+    })
+
+    # ── Phase 2 KPI Cards ─────────────────────────────────────────────────────
+    def kpi(title, value, bg, fg):
+        return html.Div([
+            html.H4(title, style={'color': fg, 'marginBottom': '5px', 'fontSize': '13px'}),
+            html.H2(value, style={'margin': '0', 'fontSize': '22px'})
+        ], style={'backgroundColor': bg, 'padding': '18px', 'borderRadius': '10px',
+                  'textAlign': 'center', 'flex': '1', 'margin': '8px'})
+
+    phase2_cards = html.Div([
+        html.Div([
+            kpi('PD (Annual)',       f'{pd_rate:.2%}',          '#fef9e7', '#d4ac0d'),
+            kpi('LGD',              f'{lgd_rate:.0%}',          '#fef9e7', '#d4ac0d'),
+            kpi('EAD',              f'${ead:,.0f}',             '#fef9e7', '#d4ac0d'),
+            kpi('Expected Loss',    f'${total_el:,.2f}',        '#fadbd8', '#e74c3c'),
+        ], style={'display': 'flex', 'flexWrap': 'wrap'}),
+        html.Div([
+            kpi('Economic Capital', f'${ec:,.2f}',              '#ebdef0', '#8e44ad'),
+            kpi('EC as % of EAD',  f'{ec_result["K_pct"]:.2%}',  '#ebdef0', '#8e44ad'),
+            kpi('Reg Capital (8%)', f'${reg_cap:,.2f}',         '#d6eaf8', '#2980b9'),
+            kpi('Risk Weight',      f'{rc_result["Risk_Weight"]:.0%}', '#d6eaf8', '#2980b9'),
+            kpi('RWA',              f'${rc_result["RWA"]:,.2f}', '#d6eaf8', '#2980b9'),
+        ], style={'display': 'flex', 'flexWrap': 'wrap'}),
+        html.Div([
+            kpi('PV Net Income',    f'${total_net:,.2f}',       '#e8f8f5', '#27ae60'),
+            kpi('Risk-Adj Return',  f'${total_net - total_el:,.2f}', '#e8f8f5', '#27ae60'),
+            kpi('RAROC',            f'{raroc_val:.2%}',
+                '#d5f5e3' if beats_hurdle else '#fadbd8',
+                '#27ae60' if beats_hurdle else '#e74c3c'),
+            kpi('Hurdle Rate',      f'{hurdle:.2%}',            '#ecf0f1', '#34495e'),
+        ], style={'display': 'flex', 'flexWrap': 'wrap'}),
+    ], style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '10px',
+              'boxShadow': '2px 2px 10px rgba(0,0,0,0.1)', 'marginBottom': '20px'})
+
+    # ── EL Chart: Monthly EL vs Net Income ───────────────────────────────────
+    el_fig = go.Figure()
+    el_fig.add_trace(go.Scatter(x=df_el['Month'], y=df_el['Net_Income'],
+                                name='Net Income', mode='lines',
+                                line=dict(color='#27ae60', width=2)))
+    el_fig.add_trace(go.Scatter(x=df_el['Month'], y=df_el['Monthly_EL'],
+                                name='Expected Loss (EL)', mode='lines',
+                                fill='tozeroy', line=dict(color='#e74c3c', width=2),
+                                fillcolor='rgba(231,76,60,0.2)'))
+    el_fig.add_trace(go.Scatter(x=df_el['Month'],
+                                y=df_el['Net_Income'] - df_el['Monthly_EL'],
+                                name='Net Income after EL', mode='lines',
+                                line=dict(color='#9b59b6', width=2, dash='dash')))
+    el_fig.update_layout(title='Monthly Net Income vs Expected Loss',
+                         xaxis_title='Month', yaxis_title='Amount ($)',
+                         hovermode='x unified', height=420)
+
+    # ── Capital Chart: EC vs Reg Capital ────────────────────────────────────
+    cap_fig = go.Figure()
+    cap_fig.add_trace(go.Bar(name='Economic Capital',     x=['Capital'], y=[ec],
+                             marker_color='#8e44ad'))
+    cap_fig.add_trace(go.Bar(name='Regulatory Capital',   x=['Capital'], y=[reg_cap],
+                             marker_color='#2980b9'))
+    cap_fig.add_trace(go.Bar(name='Total Expected Loss',  x=['Capital'], y=[total_el],
+                             marker_color='#e74c3c'))
+    cap_fig.add_trace(go.Bar(name='PV Net Income',        x=['Capital'], y=[max(total_net,0)],
+                             marker_color='#27ae60'))
+    cap_fig.update_layout(title='Capital Requirements vs Income & Loss',
+                          barmode='group', yaxis_title='Amount ($)', height=420)
+
+    # ── RAROC Waterfall ───────────────────────────────────────────────────────
+    wf_fig = go.Figure(go.Waterfall(
+        orientation='v',
+        measure=['absolute', 'relative', 'relative', 'relative', 'relative', 'total'],
+        x=['PV Interest\nIncome', '+ PV NII', '- PV Interest\nExpense',
+           '- PV NIE', '- Expected\nLoss', 'Risk-Adj\nReturn'],
+        y=[metrics['PV_Interest_Income'],
+           metrics['PV_Non_Interest_Income'],
+           -metrics['PV_Interest_Expense'],
+           -metrics['PV_Non_Interest_Expense'],
+           -total_el,
+           0],
+        connector={'line': {'color': 'rgb(63,63,63)'}},
+        increasing={'marker': {'color': '#27ae60'}},
+        decreasing={'marker': {'color': '#e74c3c'}},
+        totals={'marker': {'color': '#2980b9'}}
+    ))
+    wf_fig.add_hline(y=0, line_dash='dash', line_color='gray')
+    wf_fig.update_layout(title='RAROC Waterfall: From Revenue to Risk-Adjusted Return',
+                         yaxis_title='Amount ($)', height=450)
+
+    return (summary_cards, income_fig, expense_fig, netincome_fig, balance_fig, table_div,
+            {'marginTop': '40px', 'display': 'block'},
+            raroc_banner, phase2_cards, el_fig, cap_fig, wf_fig)
 
 # Toggle monthly cash flow section
 @app.callback(
@@ -718,6 +1006,82 @@ def toggle_monthly_view(toggle_clicks, calc_clicks, principal, interest_rate, te
     else:
         return {'display': 'none'}, '📅 View All Monthly Cash Flows', html.Div()
 
+# Toggle monthly EL table
+@app.callback(
+    [Output('el-table-section', 'style'),
+     Output('toggle-el-btn', 'children'),
+     Output('el-monthly-table', 'children')],
+    [Input('toggle-el-btn', 'n_clicks'),
+     Input('calculate-btn', 'n_clicks')],
+    [State('principal', 'value'),
+     State('interest-rate', 'value'),
+     State('term', 'value'),
+     State('ftp-rate', 'value'),
+     State('discount-rate', 'value'),
+     State('nii-fee', 'value'),
+     State('nii-months', 'value'),
+     State('nie-amount', 'value'),
+     State('pd-rating', 'value'),
+     State('lgd-grade', 'value')]
+)
+def toggle_el_table(toggle_clicks, calc_clicks, principal, interest_rate, term,
+                    ftp_rate, discount_rate, nii_fee, nii_months, nie_amount,
+                    pd_rating, lgd_grade):
+    if calc_clicks == 0:
+        return {'display': 'none'}, 'View Monthly EL Schedule', html.Div()
+
+    is_visible = (toggle_clicks % 2) == 1
+    if not is_visible:
+        return {'display': 'none'}, 'View Monthly EL Schedule', html.Div()
+
+    df = generate_amortization_schedule(principal, interest_rate, term, ftp_rate,
+                                        nii_fee, nii_months, nie_amount, discount_rate)
+    pd_rate  = PD_SCALE[pd_rating]
+    lgd_rate = LGD_SCALE[lgd_grade]
+    df_el    = calculate_expected_loss(df, pd_rate, lgd_rate)
+
+    display = df_el[['Month', 'Beginning_Balance', 'EAD', 'Monthly_PD', 'LGD',
+                      'Monthly_EL', 'Cumulative_EL', 'Net_Income']].copy()
+    display['Net_After_EL'] = display['Net_Income'] - display['Monthly_EL']
+
+    for col in ['Beginning_Balance', 'EAD', 'Monthly_EL', 'Cumulative_EL',
+                'Net_Income', 'Net_After_EL']:
+        display[col] = display[col].apply(lambda x: f'${x:,.2f}')
+    display['Monthly_PD'] = display['Monthly_PD'].apply(lambda x: f'{x:.4%}')
+    display['LGD']        = display['LGD'].apply(lambda x: f'{x:.0%}')
+
+    col_labels = {'Month': 'Month', 'Beginning_Balance': 'Beg Balance',
+                  'EAD': 'EAD', 'Monthly_PD': 'Monthly PD', 'LGD': 'LGD',
+                  'Monthly_EL': 'Monthly EL', 'Cumulative_EL': 'Cumulative EL',
+                  'Net_Income': 'Net Income', 'Net_After_EL': 'Net After EL'}
+
+    table = dash_table.DataTable(
+        data=display.to_dict('records'),
+        columns=[{'name': col_labels[c], 'id': c} for c in display.columns],
+        style_table={'overflowX': 'auto', 'maxHeight': '500px', 'overflowY': 'auto'},
+        style_cell={'textAlign': 'right', 'padding': '10px',
+                    'fontSize': '13px', 'fontFamily': 'Arial'},
+        style_header={'backgroundColor': '#8e44ad', 'color': 'white',
+                      'fontWeight': 'bold', 'textAlign': 'center'},
+        style_data_conditional=[
+            {'if': {'row_index': 'odd'}, 'backgroundColor': '#f5eef8'},
+            {'if': {'filter_query': '{Net_After_EL} contains "-"',
+                    'column_id': 'Net_After_EL'},
+             'backgroundColor': '#fadbd8', 'color': '#c0392b', 'fontWeight': 'bold'}
+        ],
+        fixed_rows={'headers': True},
+        page_size=50
+    )
+    return ({'display': 'block'},
+            'Hide Monthly EL Schedule',
+            html.Div([
+                html.P(f'Monthly Expected Loss Schedule - All {len(display)} Months',
+                       style={'fontWeight': 'bold', 'textAlign': 'center',
+                              'color': '#2c3e50', 'marginBottom': '10px'}),
+                table
+            ], style={'backgroundColor': 'white', 'padding': '20px',
+                      'borderRadius': '10px', 'boxShadow': '2px 2px 10px rgba(0,0,0,0.1)'}))
+
 # Download callback
 @app.callback(
     Output('download-dataframe-csv', 'data'),
@@ -745,10 +1109,15 @@ if __name__ == '__main__':
     print("RAROC Model - Commercial Term Loan Pricing")
     print("="*70)
     print("\nPhase 1: Cash Flow Analysis")
-    print("  - Calculate Interest Income & Expense")
-    print("  - Calculate Non-Interest Income & Expense")
+    print("  - Interest Income & Expense (FTP)")
+    print("  - Non-Interest Income & Expense")
     print("  - Present Value calculations")
-    print("  - Amortization schedule generation")
+    print("  - Full amortization schedule")
+    print("\nPhase 2: Credit Risk & Capital")
+    print("  - Expected Loss (EL = PD x LGD x EAD)")
+    print("  - Economic Capital (Basel II IRB / Vasicek)")
+    print("  - Regulatory Capital (Basel III Standardised)")
+    print("  - RAROC = (Net Income - EL) / Economic Capital")
     print("\nOpen your browser: http://127.0.0.1:8050/")
     print("Press Ctrl+C to stop")
     print("="*70 + "\n")
