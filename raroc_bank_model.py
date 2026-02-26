@@ -503,96 +503,105 @@ def update_results(n_clicks, contents, principal, interest_rate, term, ftp_rate,
     # Calculate summary metrics
     metrics = calculate_summary_metrics(df)
 
-    # Summary Cards
+    # Tax calculation
+    tax_rate   = (hurdle_rate or 12.0) * 0   # placeholder — pulled from input below
+    tax_rate   = 0.21                          # 21% federal corporate tax rate (no input yet — see note)
+    after_tax  = lambda x: x * (1 - tax_rate)
+
+    # Helper: card with hover tooltip
+    def p1_card(title, value, tooltip, bg, fg):
+        return html.Div([
+            html.Div([
+                html.Span(title, style={'fontWeight': 'bold', 'color': fg, 'fontSize': '13px'}),
+                html.Span(' ⓘ', title=tooltip,
+                          style={'cursor': 'help', 'color': '#aaa', 'fontSize': '13px',
+                                 'marginLeft': '4px'})
+            ], style={'marginBottom': '8px'}),
+            html.H2(value, style={'margin': '0', 'fontSize': '20px'})
+        ], style={'backgroundColor': bg, 'padding': '18px', 'borderRadius': '10px',
+                  'textAlign': 'center', 'flex': '1', 'margin': '8px'})
+
     summary_cards = html.Div([
-        html.H3('Summary Metrics', style={'textAlign': 'center', 'marginBottom': '20px'}),
+        html.H3('Phase 1 — Summary Metrics  (hover ⓘ for formula)',
+                style={'textAlign': 'center', 'marginBottom': '20px', 'color': '#2c3e50'}),
+        html.P('* Tax not included in Phase 1 totals. Pre-tax figures shown. '
+               'After-tax figures appear in the RAROC section below.',
+               style={'textAlign': 'center', 'color': '#e74c3c', 'fontSize': '12px',
+                      'marginBottom': '20px', 'fontStyle': 'italic'}),
         html.Div([
-            # Row 1 - Totals
+            # Row 1 — Totals (nominal)
             html.Div([
-                html.Div([
-                    html.H4('Total Interest Income', style={'color': '#27ae60', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['Total_Interest_Income']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#e8f8f5', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
+                p1_card('Total Interest Income',
+                        f"${metrics['Total_Interest_Income']:,.2f}",
+                        'Formula: Sum of (Outstanding Balance × Loan Rate / 12) for each month.\n'
+                        'This is the gross revenue the bank earns from charging the borrower interest.',
+                        '#e8f8f5', '#27ae60'),
+                p1_card('Total Interest Expense',
+                        f"${metrics['Total_Interest_Expense']:,.2f}",
+                        'Formula: Sum of (Outstanding Balance × FTP Rate / 12) for each month.\n'
+                        'FTP (Funds Transfer Pricing) is the internal cost the bank pays to fund the loan.',
+                        '#fadbd8', '#e74c3c'),
+                p1_card('Total Non-Interest Income',
+                        f"${metrics['Total_Non_Interest_Income']:,.2f}",
+                        'Formula: Fixed fee × number of collection months.\n'
+                        'Fees, service charges, or other non-interest revenue tied to the loan.',
+                        '#d6eaf8', '#2980b9'),
+                p1_card('Total Non-Interest Expense',
+                        f"${metrics['Total_Non_Interest_Expense']:,.2f}",
+                        'Formula: Fixed operating cost × term months.\n'
+                        'Direct costs to originate, service, and administer the loan (salaries, systems, etc.).',
+                        '#fdebd0', '#e67e22'),
+            ], style={'display': 'flex', 'flexWrap': 'wrap'}),
 
-                html.Div([
-                    html.H4('Total Interest Expense', style={'color': '#e74c3c', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['Total_Interest_Expense']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#fadbd8', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
-
-                html.Div([
-                    html.H4('Total NII', style={'color': '#3498db', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['Total_Non_Interest_Income']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#d6eaf8', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
-
-                html.Div([
-                    html.H4('Total NIE', style={'color': '#e67e22', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['Total_Non_Interest_Expense']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#fdebd0', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
-            ], style={'display': 'flex', 'justifyContent': 'space-around', 'flexWrap': 'wrap'}),
-
-            # Row 2 - Present Values
+            # Row 2 — Present Values
             html.Div([
-                html.Div([
-                    html.H4('PV Interest Income', style={'color': '#27ae60', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['PV_Interest_Income']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#e8f8f5', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
+                p1_card('PV Interest Income',
+                        f"${metrics['PV_Interest_Income']:,.2f}",
+                        'Formula: Interest Income(t) / (1 + Discount Rate/12)^t  summed over all months.\n'
+                        'Present value tells you what future interest income is worth in today\'s dollars.',
+                        '#e8f8f5', '#27ae60'),
+                p1_card('PV Interest Expense',
+                        f"${metrics['PV_Interest_Expense']:,.2f}",
+                        'Formula: Interest Expense(t) / (1 + Discount Rate/12)^t  summed over all months.\n'
+                        'Present value of the FTP funding cost discounted to today.',
+                        '#fadbd8', '#e74c3c'),
+                p1_card('PV Non-Interest Income',
+                        f"${metrics['PV_Non_Interest_Income']:,.2f}",
+                        'Formula: NII Fee(t) / (1 + Discount Rate/12)^t  summed over collection months.\n'
+                        'Present value of all fee income received during the collection period.',
+                        '#d6eaf8', '#2980b9'),
+                p1_card('PV Non-Interest Expense',
+                        f"${metrics['PV_Non_Interest_Expense']:,.2f}",
+                        'Formula: NIE(t) / (1 + Discount Rate/12)^t  summed over all months.\n'
+                        'Present value of all operating costs over the life of the loan.',
+                        '#fdebd0', '#e67e22'),
+            ], style={'display': 'flex', 'flexWrap': 'wrap'}),
 
-                html.Div([
-                    html.H4('PV Interest Expense', style={'color': '#e74c3c', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['PV_Interest_Expense']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#fadbd8', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
-
-                html.Div([
-                    html.H4('PV NII', style={'color': '#3498db', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['PV_Non_Interest_Income']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#d6eaf8', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
-
-                html.Div([
-                    html.H4('PV NIE', style={'color': '#e67e22', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['PV_Non_Interest_Expense']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#fdebd0', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
-            ], style={'display': 'flex', 'justifyContent': 'space-around', 'flexWrap': 'wrap'}),
-
-            # Row 3 - Net Income
+            # Row 3 — Net Income
             html.Div([
-                html.Div([
-                    html.H4('Total Net Income', style={'color': '#9b59b6', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['Total_Net_Income']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#ebdef0', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
-
-                html.Div([
-                    html.H4('PV Net Income', style={'color': '#9b59b6', 'marginBottom': '5px'}),
-                    html.H2(f"${metrics['PV_Net_Income']:,.2f}", style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#ebdef0', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
-
-                html.Div([
-                    html.H4('Monthly Payment', style={'color': '#34495e', 'marginBottom': '5px'}),
-                    html.H2(f"${calculate_monthly_payment(principal, interest_rate, term):,.2f}",
-                           style={'margin': '0'})
-                ], className='metric-card', style={'backgroundColor': '#ecf0f1', 'padding': '20px',
-                                                    'borderRadius': '10px', 'textAlign': 'center',
-                                                    'flex': '1', 'margin': '10px'}),
-            ], style={'display': 'flex', 'justifyContent': 'space-around', 'flexWrap': 'wrap'}),
+                p1_card('Total Net Income (Pre-Tax)',
+                        f"${metrics['Total_Net_Income']:,.2f}",
+                        'Formula: Interest Income - Interest Expense + NII - NIE  (summed over all months).\n'
+                        'Pre-tax profit generated by the loan. TAX IS NOT INCLUDED HERE.',
+                        '#ebdef0', '#8e44ad'),
+                p1_card('PV Net Income (Pre-Tax)',
+                        f"${metrics['PV_Net_Income']:,.2f}",
+                        'Formula: Net Income(t) / (1 + Discount Rate/12)^t  summed over all months.\n'
+                        'The present value of all future pre-tax profits. Used as the numerator in RAROC.',
+                        '#ebdef0', '#8e44ad'),
+                p1_card('After-Tax Net Income (est.)',
+                        f"${after_tax(metrics['Total_Net_Income']):,.2f}",
+                        f'Formula: Pre-Tax Net Income × (1 - Tax Rate).\n'
+                        f'Assumes 21% federal corporate tax rate. '
+                        f'After-tax income = ${metrics["Total_Net_Income"]:,.2f} × (1 - 0.21).',
+                        '#d5f5e3', '#1e8449'),
+                p1_card('Monthly Payment',
+                        f"${calculate_monthly_payment(principal, interest_rate, term):,.2f}",
+                        'Formula: P × [r(1+r)^n] / [(1+r)^n - 1]\n'
+                        'where P = principal, r = monthly rate, n = term months.\n'
+                        'Fixed P&I payment the borrower makes every month.',
+                        '#ecf0f1', '#34495e'),
+            ], style={'display': 'flex', 'flexWrap': 'wrap'}),
         ])
     ], style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '10px',
              'boxShadow': '2px 2px 10px rgba(0,0,0,0.1)', 'marginBottom': '30px'})
@@ -809,35 +818,109 @@ def update_results(n_clicks, contents, principal, interest_rate, term, ftp_rate,
         'color': '#27ae60' if beats_hurdle else '#e74c3c'
     })
 
+    # After-tax net income for RAROC
+    after_tax_net  = metrics['PV_Net_Income'] * (1 - tax_rate)
+    raroc_after_tax = calculate_raroc(after_tax_net, total_el, ec)
+
     # ── Phase 2 KPI Cards ─────────────────────────────────────────────────────
-    def kpi(title, value, bg, fg):
+    def kpi(title, value, tooltip, bg, fg):
         return html.Div([
-            html.H4(title, style={'color': fg, 'marginBottom': '5px', 'fontSize': '13px'}),
-            html.H2(value, style={'margin': '0', 'fontSize': '22px'})
+            html.Div([
+                html.Span(title, style={'color': fg, 'fontSize': '12px', 'fontWeight': 'bold'}),
+                html.Span(' ⓘ', title=tooltip,
+                          style={'cursor': 'help', 'color': '#bbb', 'fontSize': '12px',
+                                 'marginLeft': '3px'})
+            ], style={'marginBottom': '6px'}),
+            html.H2(value, style={'margin': '0', 'fontSize': '20px'})
         ], style={'backgroundColor': bg, 'padding': '18px', 'borderRadius': '10px',
                   'textAlign': 'center', 'flex': '1', 'margin': '8px'})
 
     phase2_cards = html.Div([
+        html.H3('Phase 2 — Credit Risk & Capital  (hover ⓘ for formula)',
+                style={'textAlign': 'center', 'marginBottom': '20px', 'color': '#2c3e50'}),
+
+        # Row 1 — Risk inputs & EL
         html.Div([
-            kpi('PD (Annual)',       f'{pd_rate:.2%}',          '#fef9e7', '#d4ac0d'),
-            kpi('LGD',              f'{lgd_rate:.0%}',          '#fef9e7', '#d4ac0d'),
-            kpi('EAD',              f'${ead:,.0f}',             '#fef9e7', '#d4ac0d'),
-            kpi('Expected Loss',    f'${total_el:,.2f}',        '#fadbd8', '#e74c3c'),
+            kpi('PD (Annual)', f'{pd_rate:.2%}',
+                'Probability of Default — annual likelihood the borrower will not repay.\n'
+                f'PD Rating {pd_rating} maps to {pd_rate:.2%} annual default probability.',
+                '#fef9e7', '#d4ac0d'),
+            kpi('LGD', f'{lgd_rate:.0%}',
+                'Loss Given Default — % of the outstanding balance the bank loses if the borrower defaults.\n'
+                f'LGD Grade {lgd_grade} = {lgd_rate:.0%}. Reflects collateral quality and recovery rates.',
+                '#fef9e7', '#d4ac0d'),
+            kpi('EAD', f'${ead:,.0f}',
+                'Exposure at Default — total amount the bank is exposed to at time of default.\n'
+                'Set to the original loan balance. In practice this can vary by month.',
+                '#fef9e7', '#d4ac0d'),
+            kpi('Expected Loss (EL)', f'${total_el:,.2f}',
+                'Formula: Monthly EL = Monthly PD × LGD × Beginning Balance\n'
+                'Monthly PD = 1 - (1 - Annual PD)^(1/12)\n'
+                'Total EL = sum of all monthly ELs over the loan life.\n'
+                'EL is the average loss the bank expects to absorb — it should be priced into the loan rate.',
+                '#fadbd8', '#e74c3c'),
         ], style={'display': 'flex', 'flexWrap': 'wrap'}),
+
+        # Row 2 — Capital
         html.Div([
-            kpi('Economic Capital', f'${ec:,.2f}',              '#ebdef0', '#8e44ad'),
-            kpi('EC as % of EAD',  f'{ec_result["K_pct"]:.2%}',  '#ebdef0', '#8e44ad'),
-            kpi('Reg Capital (8%)', f'${reg_cap:,.2f}',         '#d6eaf8', '#2980b9'),
-            kpi('Risk Weight',      f'{rc_result["Risk_Weight"]:.0%}', '#d6eaf8', '#2980b9'),
-            kpi('RWA',              f'${rc_result["RWA"]:,.2f}', '#d6eaf8', '#2980b9'),
+            kpi('Economic Capital (EC)', f'${ec:,.2f}',
+                'Formula: EC = K × EAD  (Basel II IRB / Vasicek model)\n'
+                'K = [LGD × N(G(PD)/√(1-R) + √(R/(1-R)) × G(0.999)) - PD×LGD] × Maturity Adj.\n'
+                'EC is the capital buffer needed to absorb UNEXPECTED losses at 99.9% confidence.\n'
+                'Unlike EL, EC is not priced in — it is equity set aside by the bank.',
+                '#ebdef0', '#8e44ad'),
+            kpi('EC as % of EAD', f'{ec_result["K_pct"]:.2%}',
+                'K% = Economic Capital / EAD.\n'
+                'Represents how much capital per dollar of loan exposure the bank must hold.\n'
+                'Higher PD or LGD = higher K%.',
+                '#ebdef0', '#8e44ad'),
+            kpi('Reg Capital (Basel III)', f'${reg_cap:,.2f}',
+                'Formula: Reg Capital = RWA × 8% (minimum CET1 ratio)\n'
+                'RWA = EAD × Risk Weight\n'
+                'Risk Weight is assigned by PD bucket per Basel III standardised approach.\n'
+                'This is the MINIMUM capital regulators require. Banks typically hold more.',
+                '#d6eaf8', '#2980b9'),
+            kpi('Risk Weight', f'{rc_result["Risk_Weight"]:.0%}',
+                'Basel III standardised risk weight assigned based on PD bucket.\n'
+                f'PD = {pd_rate:.2%} → Risk Weight = {rc_result["Risk_Weight"]:.0%}.\n'
+                'Higher risk weight = more regulatory capital required.',
+                '#d6eaf8', '#2980b9'),
+            kpi('RWA', f'${rc_result["RWA"]:,.2f}',
+                'Risk-Weighted Assets = EAD × Risk Weight.\n'
+                'The risk-adjusted measure of loan size used by regulators.\n'
+                'Regulatory Capital = RWA × 8%.',
+                '#d6eaf8', '#2980b9'),
         ], style={'display': 'flex', 'flexWrap': 'wrap'}),
+
+        # Row 3 — RAROC
         html.Div([
-            kpi('PV Net Income',    f'${total_net:,.2f}',       '#e8f8f5', '#27ae60'),
-            kpi('Risk-Adj Return',  f'${total_net - total_el:,.2f}', '#e8f8f5', '#27ae60'),
-            kpi('RAROC',            f'{raroc_val:.2%}',
-                '#d5f5e3' if beats_hurdle else '#fadbd8',
+            kpi('PV Net Income (Pre-Tax)', f'${total_net:,.2f}',
+                'Formula: Sum of [Net Income(t) / (1 + Discount Rate/12)^t]\n'
+                'Net Income = Int Income - Int Expense + NII - NIE\n'
+                'This is BEFORE tax and BEFORE subtracting Expected Loss.',
+                '#e8f8f5', '#27ae60'),
+            kpi('After-Tax PV Net Income', f'${after_tax_net:,.2f}',
+                f'Formula: PV Net Income × (1 - Tax Rate)\n'
+                f'= ${total_net:,.2f} × (1 - {tax_rate:.0%})\n'
+                f'Assumes {tax_rate:.0%} federal corporate tax rate.',
+                '#d5f5e3', '#1e8449'),
+            kpi('Pre-Tax RAROC', f'{raroc_val:.2%}',
+                'Formula: RAROC = (PV Net Income - EL) / Economic Capital\n'
+                f'= (${total_net:,.2f} - ${total_el:,.2f}) / ${ec:,.2f}\n'
+                'Pre-tax version. Compare to hurdle rate to assess if loan creates value.',
+                '#ebdef0' if beats_hurdle else '#fadbd8',
                 '#27ae60' if beats_hurdle else '#e74c3c'),
-            kpi('Hurdle Rate',      f'{hurdle:.2%}',            '#ecf0f1', '#34495e'),
+            kpi('After-Tax RAROC', f'{raroc_after_tax:.2%}',
+                'Formula: RAROC = (After-Tax PV Net Income - EL) / Economic Capital\n'
+                f'= (${after_tax_net:,.2f} - ${total_el:,.2f}) / ${ec:,.2f}\n'
+                'After-tax version is preferred for shareholder value analysis.',
+                '#d5f5e3' if raroc_after_tax >= hurdle else '#fadbd8',
+                '#27ae60' if raroc_after_tax >= hurdle else '#e74c3c'),
+            kpi('Hurdle Rate', f'{hurdle:.2%}',
+                'The minimum acceptable RAROC for this loan to be considered value-creating.\n'
+                'Set by management based on cost of equity / shareholder return expectations.\n'
+                'RAROC > Hurdle Rate = loan creates value. RAROC < Hurdle = loan destroys value.',
+                '#ecf0f1', '#34495e'),
         ], style={'display': 'flex', 'flexWrap': 'wrap'}),
     ], style={'backgroundColor': 'white', 'padding': '20px', 'borderRadius': '10px',
               'boxShadow': '2px 2px 10px rgba(0,0,0,0.1)', 'marginBottom': '20px'})
